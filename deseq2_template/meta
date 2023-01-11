@@ -1,0 +1,7 @@
+sample	species	treatment	replicate
+S01	ptr	control	1
+S02	ptr	control	2
+S03	ptr	control	3
+S10	ptr	treat1	1
+S11	ptr	treat1	2
+S12	ptr	treat1	3

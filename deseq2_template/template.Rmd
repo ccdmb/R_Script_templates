@@ -1,0 +1,443 @@
+---
+title: "template RNAseq analysis"
+author: "Paula Moolhuijzen"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#https://rstudio-pubs-static.s3.amazonaws.com/329027_593046fb6d7a427da6b2c538caf601e1.html
+```
+
+
+```{r path, echo=FALSE, message=F, warning=F}
+getwd()
+setwd(getwd())
+print(getwd())
+```
+
+Not all these libraries maybe necessary
+
+```{r load, echo=FALSE, message=FALSE, warning=F}
+library(DESeq2)
+library(ggplot2)
+library(genefilter)
+library(gplots)
+library(pheatmap)
+library("dplyr")
+library(pca3d)
+library(ggfortify)
+library("Hmisc")
+library(corrplot)
+require(scatterplot3d)
+library(reshape2)
+library("ggbeeswarm")
+library("ggVennDiagram")
+library(topGO)
+library("ggpubr")
+library(stringr)
+library(biomaRt)
+library(RColorBrewer)
+library(data.table)
+library(plyr)
+library(Rgraphviz)
+library("GSEABase")
+```
+
+## Read in meta data and expression matrix
+
+```{r, echo=FALSE}
+
+meta <- read.table("meta", sep="\t", header = TRUE)
+
+mat <- read.table("matrix", sep="\t", header = TRUE, row.names=1)
+
+data <- DESeqDataSetFromMatrix(countData=mat, colData=meta, design = ~treatment)
+dds <- DESeq(data)
+
+norm.counts <- counts(dds, normalized=TRUE)
+norm.counts <- log2(norm.counts + 1)
+
+```
+
+Plots for raw read count per sample
+
+```{r Sample Read Count, fig.cap = "Sample read count", echo=FALSE}
+
+sampColor <- c("control"="#FF6666", "treat1"="#0080FF")
+
+## Add a column to the pheno type to specify the color of each sample according to its genotype
+meta$color[meta$treatment == "control"] <- sampColor["control"]
+meta$color[meta$treatment == "treat1"] <- sampColor["treat1"]
+
+
+bpt <- barplot(colSums(mat)/1000000, 
+               col=meta$color, 
+               las=1,  horiz=TRUE,
+               xlab="No. aligned reads (million)", cex.axis=1.5, cex.names=1.5, cex.lab = 2)
+
+```
+
+Variance stabilised expression data
+
+```{r dovst, echo=FALSE, message=F, warning=F}
+vst <- vst(data, blind = FALSE)
+mat.e <- assay(vst)
+
+```
+
+
+
+PCA samples variance stabilised - top 2000 
+
+```{r PCA, fig.cap = "PCA plot", echo=FALSE, message=F, warning=F}
+rgl.printRglwidget = TRUE
+
+set <-  colorRampPalette(brewer.pal(7, "Paired"))(8)
+
+pcaData <- plotPCA(vst, intgroup = "treatment", returnData = TRUE, ntop = 2000)
+percentVar <- round(100 * attr(pcaData, "percentVar")) 
+
+```
+
+
+
+```{r}
+ggplot(pcaData, aes(x = PC1, y = PC2,  color=treatment,  label=name)) + 
+  geom_point(size =5) + 
+  xlab(paste0("PC1: ", percentVar[1], "% variance")) + 
+  ylab(paste0("PC2: ", percentVar[2], "% variance")) + 
+  ggtitle("PCA, variance stabilised") + 
+  theme( panel.border = element_rect(fill= "transparent"),
+        axis.text=element_text(size=16),
+        axis.title=element_text(size=18, face="bold"), 
+        legend.text=element_text(size=18), legend.title=element_text(size=18, face="bold"),
+        strip.text = element_text(size = 16, face = "bold")) +
+  scale_fill_manual(values = set) 
+
+```
+
+```{r , echo=FALSE, fig.width=12, fig.height=10}
+rv <- rowVars(assay(vst))
+# select the ntop genes by variance
+select <- head(order(rv, decreasing=TRUE), 2000)
+
+pca <- prcomp(t(assay(vst)[select,]))
+
+v <- c(paste0("PC1: ", percentVar[1], "% variance"), paste0("PC2: ", percentVar[2], "% variance")) 
+
+
+```
+
+```{r}
+
+
+pca2d(pca, group=meta$treatment, legend="top", show.centroids = TRUE, show.group.labels=FALSE,axe.titles=v) 
+
+
+
+```
+
+
+## 1. Contrast example for differential expression between two conditions
+
+Can change to padj <= 0.05 and abs(log2FoldChange) >= 1)
+
+```{r, echo=FALSE, message=FALSE, fig.height=10, fig.width=10}
+res <- results(dds, contrast=c("treatment", "treat1" , "control"))
+sig <- subset(res, (padj <= 0.01 & !is.na(pvalue))& abs(log2FoldChange) >= 2 ) 
+
+write.table(sig, file="result-significant-p0.01-fc2.txt", sep="\t", col.names=TRUE, row.names=TRUE)
+dim(sig)
+```
+
+
+Sort by padj and plot top 10 log2 expression for each sample
+
+```{r, fig.height=10, fig.width=10}
+n <- tail(order(sig$padj, decreasing=TRUE), 10)
+nn <- rownames(sig[n,])
+
+topgene <- norm.counts[nn,]
+#topgene  <- topgene - rowMeans(topgene) 
+
+anno <- as.data.frame(colData(dds)["treatment"])
+pheatmap(topgene, annotation_col = anno, fontsize_col = 12, fontsize_row = 12, 
+         cluster_cols = FALSE, show_rownames = TRUE)
+
+```
+
+Plot log2 mean expression for each treatment
+
+```{r, fig.width=10, fig.height=10, echo=FALSE}
+
+
+sum <- t(apply(topgene, 1, function(row) c(mean(row[c(1,2,3)]),  #control
+                                         mean(row[c(4,5,6)])        #treatment
+                                         )))
+
+#su.sum  <- su.sum - rowMeans(su.sum)
+
+colnames(sum) <- c("control", "treatment")
+
+ x <- c("control", "treatment")
+ y <- colnames(sum)
+ 
+anno <- data.frame("Treatment" = x, row.names=y)
+
+# Specify colors
+ann_colors = list(
+    treatment = c(control="red",treatment="blue") )
+
+ pheatmap(sum,  annotation_col = anno, fontsize_col = 12, 
+         fontsize_row = 10, show_rownames=TRUE, show_colnames=TRUE, 
+         cluster_rows = TRUE, cluster_cols = FALSE, cutree_rows = 5, 
+         annotation_colors = ann_colors)
+
+```
+
+
+## Venn diagram 
+
+```{r}
+
+up <- subset(sig, log2FoldChange >= 1)
+up <- rownames(up)
+
+dn <- subset(sig,  log2FoldChange < -1)
+dn <- rownames(dn)
+vdeu <- list(
+  up = up, 
+  down = dn)
+
+venn = Venn(vdeu)
+#data = process_data(venn, shape_id == "701")
+
+
+ggVennDiagram(vdeu, label="count",lwd = 0.3, lty = 1, color = "grey",  label_alpha = 0, edge_size = 0.3, label_size = 8, set_size = 8) + 
+  scale_fill_gradient(low = "white", high = "red") +
+  theme(legend.position = "none")
+ 
+
+```
+
+
+
+### Reading in data for all wheat gene ids mapped to Gene Ontologies (GO)
+https://bioconductor.org/packages/devel/bioc/vignettes/topGO/inst/doc/topGO.pdf
+
+GO term enrichment at p-value < 0.01 for significantly DE genes 
+
+```{r read, echo=FALSE, message=FALSE}
+geneID2GO <- readMappings(file = "geneid2go.map.txt", sep="\t")
+
+geneNames <- names(geneID2GO)
+
+```
+
+
+# The DE lists all
+```{r, echo=FALSE, message=FALSE}
+
+
+glist <-c("CC","BP","MF")
+cnt=0
+b=0
+l <- list()
+deup <- as.vector(row.names(subset(sig, log2FoldChange >= 1)))
+ded <- factor(as.vector(row.names(subset(sig, log2FoldChange <= -1))))
+
+geneListUP <- factor(as.integer(geneNames %in% deup))
+names(geneListUP) <- geneNames
+geneListD <- factor(as.integer(geneNames %in% ded))
+names(geneListD) <- geneNames
+
+for(go in glist){
+    b=b+1
+    sampleGOup <- new("topGOdata", ontology = go, allGenes = geneListUP,
+              geneSel = deup,
+              annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+    resultFisher <- runTest(sampleGOup, algorithm = "weight01", statistic = "fisher")
+    induced <- GenTable(sampleGOup, weightFisher = resultFisher, orderBy='weightFisher',
+                  topNodes = length(resultFisher@score), numChar = 120)
+
+    induced$weightFisher <- gsub( "< ", "", as.character(induced$weightFisher))
+    induced$weightFisher <- as.numeric(induced$weightFisher)
+    induced.p= induced[which(induced$weightFisher<=0.01),]
+
+    induced.p$reg[induced.p$weightFisher <=0.01] <- "Induced"
+
+
+    sampleGOdwn <- new("topGOdata", ontology = go, allGenes = geneListD,
+              geneSel = ded,
+              annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+    resultFisher <- runTest(sampleGOdwn, algorithm = "weight01", statistic = "fisher")
+    supress <- GenTable(sampleGOdwn, weightFisher = resultFisher, orderBy='weightFisher',
+                  topNodes = length(resultFisher@score), numChar = 150)
+
+    supress$weightFisher <- gsub( "< ", "", as.character(supress$weightFisher))
+    supress$weightFisher <- as.numeric(supress$weightFisher)
+    supress.p= supress[which(supress$weightFisher<=0.01),]
+
+    supress.p$reg[supress.p$weightFisher <=0.01] <- "Supressed"
+
+    new <- rbind(supress.p, induced.p)
+    #new <- new[new$Significant/new$Annotated>0.12,]
+
+    new$reg <- factor(new$reg, levels = c("Induced", "Supressed"),
+                          labels = c("Induced", "Supressed"))
+
+    new$godomain <- go
+    new$godomain <- factor(new$godomain,  levels = c(go),
+                    labels = c(go))
+    
+    
+    
+    ngo <- paste("result_",go,sep="")
+    
+    write.table(new, file=paste(ngo, "-go.txt", sep=""), sep="\t", col.names=TRUE, row.names=TRUE)
+    
+    new$Term = str_wrap(new$Term, width = 50)
+
+    
+    l[[b]] <-new
+    
+  }
+    
+
+```
+
+Plot and see
+
+```{r, echo=FALSE, message=FALSE,  fig.width=6, fig.height=8}
+
+
+go <- rbindlist(l,use.names=TRUE)
+
+go$species <- "Wheat" # can change this to what ever
+mf <- subset(go, godomain == "MF")
+mf <- subset(mf, (mf$weightFisher < 1e-04 & mf$Significant/mf$Annotated > 0.7 ))
+
+
+n <- length(unique(mf$Term))
+set <-  colorRampPalette(brewer.pal(12, "Paired"))(n)
+
+#mf$Ratio <- mf$Significant/mf$Annotated
+mf$Ratio <- mf$Significant
+mf$Term = str_wrap(mf$Term,30)
+
+pdf(file="molecular-function.pdf", height = 12, width = 8)
+
+ggplot(mf, aes(species)) + 
+  theme(axis.text=element_text(size=12), #text=element_text(family="Calibri"), 
+        axis.title=element_text(size=14), legend.text=element_text(size=12), 
+        legend.title=element_text(size=12, face="bold"), strip.text = element_text(size = 12),
+        strip.background=element_rect(fill="white"), panel.background = element_blank(), 
+        panel.grid = element_line(color="grey90"), legend.position = "right", panel.border = element_rect(fill = NA)) +
+  geom_bar(data = subset(mf, reg == "Induced"), 
+           aes(y = Ratio, fill = Term), stat = "identity", position="stack") +
+  geom_bar(data = subset(mf, reg == "Supressed"),
+           aes(y = -Ratio, fill = Term), stat = "identity", position="stack") + xlab("Ptr") +
+  xlab("Species") + ylab("Number of SDEG regulated") +
+  guides(fill=guide_legend(nrow=n, title="GO molecular function")) + geom_hline(yintercept = 0,colour = "grey90") +
+  scale_fill_manual(values = set)
+
+dev.off()
+
+```
+
+
+```{r, echo=FALSE, message=FALSE,  fig.width=6, fig.height=8}
+
+bp <- subset(go, godomain == "BP")
+bp <- subset(bp, (bp$weightFisher < 1e-04 & bp$Significant/bp$Annotated > 0.7 ))
+
+n <- length(unique(bp$Term))
+set <-  colorRampPalette(brewer.pal(12, "Paired"))(n)
+
+bp$Ratio <- bp$Significant
+bp$Term = str_wrap(bp$Term,30)
+
+#pdf(file="biological-process.pdf", height = 12, width = 8)
+
+ggplot(bp, aes(species)) + 
+  theme(axis.text=element_text(size=12), #text=element_text(family="Calibri"), 
+        axis.title=element_text(size=14,face="bold"), legend.text=element_text(size=12), 
+        legend.title=element_text(size=12, face="bold"), strip.text = element_text(size = 12),
+        strip.background=element_rect(fill="white"), panel.background = element_blank(), 
+        panel.grid = element_line(color="grey90"), legend.position = "right", panel.border = element_rect(fill = NA)) +
+  geom_bar(data = subset(bp, reg == "Induced"), 
+           aes(y = Ratio, fill = Term), stat = "identity", position="stack") +
+  geom_bar(data = subset(bp, reg == "Supressed"),
+           aes(y = -Ratio, fill = Term), stat = "identity", position="stack") + 
+  xlab("Species") + ylab("Number of SDEG regulated") +
+  guides(fill=guide_legend(nrow=n, title="GO biological process")) + geom_hline(yintercept = 0,colour = "grey90") +
+  scale_fill_manual(values = set)
+
+#dev.off()
+
+```
+
+
+```{r, echo=FALSE, message=FALSE,  fig.width=6, fig.height=8}
+
+cc <- subset(go, godomain == "CC")
+cc <- subset(cc, (cc$weightFisher < 1e-04 & cc$Significant/cc$Annotated > 0.7 ))
+
+n <- length(unique(cc$Term))
+set <-  colorRampPalette(brewer.pal(12, "Paired"))(n)
+
+cc$Ratio <- cc$Significant
+cc$Term = str_wrap(cc$Term,20)
+
+#pdf(file="cellular-component.pdf", height = 12, width = 8)
+
+ggplot(cc, aes(species)) + 
+  theme(axis.text=element_text(size=12), # text=element_text(family="Calibri"), 
+        axis.title=element_text(size=14,face="bold"), legend.text=element_text(size=12), 
+        legend.title=element_text(size=12, face="bold"), strip.text = element_text(size = 12),
+        strip.background=element_rect(fill="white"), panel.background = element_blank(), 
+        panel.grid = element_line(color="grey90"), legend.position = "right", panel.border = element_rect(fill = NA)) +
+  geom_bar(data = subset(cc, reg == "Induced"), 
+           aes(y = Ratio, fill = Term), stat = "identity", position="stack") +
+  geom_bar(data = subset(cc, reg == "Supressed"),
+           aes(y = -Ratio, fill = Term), stat = "identity", position="stack") + 
+  xlab("Species") + ylab("Number of SDEG regulated") +
+  guides(fill=guide_legend(nrow=n, title="GO cellular component")) + geom_hline(yintercept = 0,colour = "grey90") +
+  scale_fill_manual(values = set)
+
+#dev.off()
+
+```
+
+### Example topGO graph for the top 5 nodes for BP
+
+```{r bp, echo=FALSE, fig.cap="Biological processes", message=FALSE}
+
+
+
+GOdata <- new("topGOdata", ontology = "BP", allGenes = geneListUP,
+              geneSel = deup,
+              annot = annFUN.gene2GO, gene2GO = geneID2GO)
+
+resultFisher <- runTest(GOdata, algorithm = "weight01", statistic = "fisher")
+
+
+tab <- GenTable(GOdata, raw.p.value = resultFisher,
+                  topNodes = length(resultFisher@score), numChar = 120)
+
+write.table(tab, file="biological_process.txt", sep="\t", col.names=TRUE, row.names=TRUE)
+
+showSigOfNodes(GOdata, score(resultFisher), firstSigNodes = 5, useInfo ='all')
+#dev.print(pdf, "biological_process_graph.pdf")             
+```
+
+
+```{r}
+sessionInfo()
+```
