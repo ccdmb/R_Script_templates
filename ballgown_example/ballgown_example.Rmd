@@ -1,0 +1,455 @@
+---
+title: "RNAseq wheat streak ballgown analysis"
+author: "Paula Moolhuijzen"
+date: '`r format(Sys.time(), "%d %B, %Y")`'
+output: 
+ html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r path, echo=FALSE, message=FALSE, warning=FALSE}
+#getwd()
+setwd(getwd())
+#print(getwd())
+```
+
+```{r, message=FALSE, warning=FALSE}
+## Load required libraries
+
+library(ballgown)
+library(RSkittleBrewer)
+library(genefilter)
+library(dplyr)
+library(devtools)
+library(ggplot2)
+
+```
+
+Set up path to phenotype meta data csv file
+
+```{r}
+args = commandArgs(trailingOnly=TRUE)
+if (length(args)==0) {
+# assume no output directory argument was given to rnaseq_pipeline.sh
+  pheno_data_file <- paste0(getwd(), "/siskiyou_meta_data1.csv")
+} else {
+  pheno_data_file <- args[1]
+}
+
+```
+
+
+```{r, echo=FALSE}
+## Remove # below to install ballgown and RSkittleBrewer
+
+#if (!requireNamespace("BiocManager", quietly=TRUE))
+#  install.packages("BiocManager")
+#BiocManager::install("ballgown")
+
+#devtools::install_github('alyssafrazee/RSkittleBrewer')
+```
+
+
+
+### Read in phenotype and ballgown data
+
+```{r, echo=FALSE}
+## Read phenotype sample data
+pheno_data <- read.csv(pheno_data_file)
+```
+
+```{r, echo=FALSE}
+## Read in expression data
+bg <- ballgown(dataDir = paste0(getwd(), "/ballgown"), samplePattern="S", pData=pheno_data)
+
+## Filter low abundance genes
+bg_filt <- subset(bg, "rowVars(texpr(bg)) > 1", genomesubset=TRUE)
+```
+
+### Comparing Resistant to Susceptible (regardless of time point)
+
+```{r, echo=FALSE}
+
+## DE by transcript
+results_transcripts <-  stattest(bg_filt, feature='transcript', covariate='reaction', 
+         adjustvars=c('replication'), getFC=TRUE, meas='FPKM')
+
+## DE by gene
+results_genes <-  stattest(bg_filt, feature='gene', covariate='reaction', 
+         adjustvars=c('replication'), getFC=TRUE, meas='FPKM')
+
+## Add gene name
+results_transcripts <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), results_transcripts)
+```
+
+```{r, echo=FALSE}
+## Sort results from smallest p-value
+results_transcripts <- arrange(results_transcripts, pval)
+results_genes <-  arrange(results_genes, pval)
+
+## Write results to CSV
+write.csv(results_transcripts, "siskiyou_transcripts_results.csv", row.names=FALSE)
+write.csv(results_genes, "siskiyou_genes_results.csv", row.names=FALSE)
+
+```
+
+https://rstudio-pubs-static.s3.amazonaws.com/289617_cb95459057764fdfb4c42b53c69c6d3f.html
+
+```{r}
+transcript_gene_table = indexes(bg)$t2g
+
+counts=table(transcript_gene_table[,"g_id"])
+c_one = length(which(counts == 1))
+c_more_than_one = length(which(counts > 1))
+c_max = max(counts)
+hist(counts, breaks=50, col="bisque4", xlab="Transcripts per gene", main="Distribution of transcript count per gene")
+legend_text = c(paste("Genes with one transcript =", c_one), paste("Genes with more than one transcript =", c_more_than_one), paste("Max transcripts for single gene = ", c_max))
+legend("topright", legend_text, lty=NULL)
+
+```
+
+
+```{r}
+## Filter for genes with q-val <0.05
+results_transcripts_signficant <- subset(results_transcripts, results_transcripts$qval <=0.05 )
+#results_transcripts_up <- subset(results_transcripts, results_transcripts$fc >= 1)
+#results_transcripts_down <- subset(results_transcripts, results_transcripts$fc < 1)
+
+results_genes_significant <- subset(results_genes, results_genes$qval <=0.05)
+
+```
+
+```{r}
+
+full_table <- texpr(bg , 'all')
+hist(full_table$length, breaks=50, xlab="Transcript length (bp)", main="Distribution of transcript lengths", col="steelblue")
+
+```
+
+```{r, fig.height=10, fig.width=8}
+gene_expression = as.data.frame(gexpr(bg_filt))
+min_nonzero=1
+
+data_colors=c("tomato1","tomato2","tomato3","tomato4","wheat1","wheat2","wheat3","wheat4")
+data_columns=c(1:4,13:16)
+short_names=c("R_24","R_48","R_72","R_96","S_24","S_48","S_72","S_96")
+
+boxplot(log2(gene_expression[,data_columns]+min_nonzero), col=data_colors, names=short_names, las=2, ylab="log2(FPKM)", main="Distribution of FPKMs for replicate 1 libraries")
+```
+
+
+### For each time point stattest Resistant versus Susceptible lines
+ 
+ https://support.bioconductor.org/p/104813/
+ 
+#### Subset at 24 hours
+
+```{r}
+
+bg_24 <- subset(bg_filt, "timepoint == 24", genomesubset=FALSE)
+
+bg_24_transcripts_results <-  stattest(bg_24, feature='transcript', covariate='reaction', 
+      adjustvars=c("replication"), getFC=TRUE, meas='FPKM', df = 3)
+
+bg_24_gene_results <-  stattest(bg_24, feature='gene', covariate='reaction', 
+      adjustvars=c("replication"), getFC=TRUE, meas='FPKM', df = 3)
+
+## Add gene name
+bg_24_transcripts_results <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), bg_24_transcripts_results)
+
+bg_24_transcripts_results_signficant <- subset(bg_24_transcripts_results, bg_24_transcripts_results$pval <=0.05 )
+bg_24_gene_results_significant <- subset(bg_24_gene_results, bg_24_gene_results$pval <=0.05)
+
+bg_24_transcripts_results_signficant <- arrange(bg_24_transcripts_results_signficant, pval)
+bg_24_gene_results_significant <-  arrange(bg_24_gene_results_significant, pval)
+
+## Write results to CSV
+write.csv(bg_24_transcripts_results_signficant, "siskiyou_24hr_transcripts_results.csv", row.names=FALSE)
+write.csv(bg_24_gene_results_significant, "siskiyou_24hr_genes_results.csv", row.names=FALSE)
+
+```
+
+
+```{r}
+bg_table = texpr(bg_filt, 'all')
+bg_gene_names = unique(bg_table[, 9:10])
+results_genes = merge(bg_24_gene_results,bg_gene_names,by.x=c("id"),by.y=c("gene_id"))
+
+sig=which(results_genes$pval<0.05)
+results_genes[,"de"] = log2(results_genes[,"fc"])
+hist(results_genes[sig,"de"], breaks=50, col="seagreen", xlab="log2(Fold change) R vs S at 24 hpi", main="Distribution of differential expression values")
+abline(v=-2, col="black", lwd=2, lty=2)
+abline(v=2, col="black", lwd=2, lty=2)
+legend("topright", "Fold-change > 4", lwd=2, lty=2)
+
+```
+
+```{r}
+sig=which(results_genes$pval<0.05)
+
+gene_expression[,"Resistant"]=apply(gene_expression[,c(1:12)], 1, mean)
+gene_expression[,"Suseptible"]=apply(gene_expression[,c(13:24)], 1, mean)
+x=log2(gene_expression[,"Resistant"]+min_nonzero)
+y=log2(gene_expression[,"Suseptible"]+min_nonzero)
+plot(x=x, y=y, pch=16, cex=0.25, xlab="Resistant FPKM (log2)", ylab="Suseptible FPKM (log2)", main="Resistant vs Suseptible FPKMs")
+abline(a=0, b=1)
+xsig=x[sig]
+ysig=y[sig]
+points(x=xsig, y=ysig, col="magenta", pch=16, cex=0.5)
+legend("topleft", "Significant (pval)", col="magenta", pch=16)
+```
+
+##### Subset at 48 hours
+
+```{r}
+
+bg_48 <- subset(bg_filt, "timepoint == 48", genomesubset=FALSE)
+
+bg_48_transcripts_results <-  stattest(bg_48, feature='transcript', covariate='reaction', 
+         adjustvars=c("replication"), getFC=TRUE, meas='FPKM', df = 3)
+
+bg_48_gene_results <-  stattest(bg_48, feature='gene', covariate='reaction', 
+         adjustvars=c('replication'), getFC=TRUE, meas='FPKM', df = 3)
+
+## Add gene name
+bg_48_transcripts_results <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), bg_48_transcripts_results)
+
+bg_48_transcripts_results_signficant <- subset(bg_48_transcripts_results, bg_48_transcripts_results$pval <=0.05 )
+bg_48_gene_results_significant <- subset(bg_48_gene_results, bg_48_gene_results$pval <=0.05)
+
+bg_48_transcripts_results_signficant <- arrange(bg_48_transcripts_results_signficant, pval)
+bg_48_gene_results_significant <-  arrange(bg_48_gene_results_significant, pval)
+
+## Write results to CSV
+write.csv(bg_48_transcripts_results_signficant, "siskiyou_48hr_transcripts_results.csv", row.names=FALSE)
+write.csv(bg_48_gene_results_significant, "siskiyou_48hr_genes_results.csv", row.names=FALSE)
+
+```
+
+##### Subset at 72 hours
+
+```{r}
+
+bg_72 <- subset(bg_filt, "timepoint == 72", genomesubset=FALSE)
+
+bg_72_transcripts_results <-  stattest(bg_72, feature='transcript', covariate='reaction', 
+         adjustvars=c('replication'), getFC=TRUE, meas='FPKM')
+
+bg_72_gene_results <-  stattest(bg_72, feature='gene', covariate='reaction', 
+         adjustvars=c('replication'), getFC=TRUE, meas='FPKM')
+
+## Add gene name
+bg_72_transcripts_results <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), bg_72_transcripts_results)
+
+
+bg_72_transcripts_results_signficant <- subset(bg_72_transcripts_results, bg_72_transcripts_results$pval <=0.05 )
+bg_72_gene_results_significant <- subset(bg_72_gene_results, bg_72_gene_results$pval <=0.05)
+
+bg_72_transcripts_results_signficant <- arrange(bg_72_transcripts_results_signficant, pval)
+bg_72_gene_results_significant <-  arrange(bg_72_gene_results_significant, pval)
+
+## Write results to CSV
+write.csv(bg_72_transcripts_results_signficant, "siskiyou_72hr_transcripts_results.csv", row.names=FALSE)
+write.csv(bg_72_gene_results_significant, "siskiyou_72hr_genes_results.csv", row.names=FALSE)
+
+```
+
+
+##### Subset at 96 hours
+
+```{r}
+
+bg_96 <- subset(bg_filt, "timepoint == 96", genomesubset=FALSE)
+
+bg_96_transcripts_results <-  stattest(bg_96, feature='transcript', covariate='reaction', 
+         adjustvars=c('replication'), getFC=TRUE, meas='FPKM')
+
+bg_96_gene_results <-  stattest(bg_96, feature='gene', covariate='reaction', 
+         adjustvars=c('replication'), getFC=TRUE, meas='FPKM')
+
+## Add gene name
+bg_96_transcripts_results <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), bg_96_transcripts_results)
+
+bg_96_transcripts_results_signficant <- subset(bg_96_transcripts_results, bg_96_transcripts_results$pval <=0.05 )
+bg_96_gene_results_significant <- subset(bg_96_gene_results, bg_96_gene_results$pval <=0.05)
+
+bg_96_transcripts_results_signficant <- arrange(bg_96_transcripts_results_signficant, pval)
+bg_96_gene_results_significant <-  arrange(bg_96_gene_results_significant, pval)
+
+## Write results to CSV
+write.csv(bg_96_transcripts_results_signficant, "siskiyou_96hr_transcripts_results.csv", row.names=FALSE)
+write.csv(bg_96_gene_results_significant, "siskiyou_96hr_genes_results.csv", row.names=FALSE)
+
+```
+
+### Time points - run with "timecourse=TRUE,  df=3"
+
+#### Subset Resistant lines (significant qval <= 0.05)
+
+```{r}
+
+bg_r <- subset(bg_filt, "reaction == 'R'", genomesubset=FALSE)
+
+bg_r_transcripts_results <-  stattest(bg_r, feature='transcript', covariate='timepoint', 
+         getFC=FALSE, meas='FPKM', timecourse=TRUE, df=3)
+
+bg_r_gene_results <-  stattest(bg_r, feature='gene', covariate='timepoint', 
+         getFC=FALSE, meas='FPKM', timecourse=TRUE, df=3)
+
+## Add gene name
+bg_r_transcripts_results <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), bg_r_transcripts_results)
+
+bg_r_transcripts_results_signficant <- subset(bg_r_transcripts_results, bg_r_transcripts_results$qval <=0.05 )
+bg_r_gene_results_significant <- subset(bg_r_gene_results, bg_r_gene_results$qval <=0.05)
+
+bg_r_transcripts_results_signficant <- arrange(bg_r_transcripts_results_signficant, qval)
+bg_r_gene_results_significant <-  arrange(bg_r_gene_results_significant, qval)
+
+## Write results to CSV
+write.csv(bg_r_transcripts_results_signficant, "siskiyou_r_transcripts_results.csv", row.names=FALSE)
+write.csv(bg_r_gene_results_significant, "siskiyou_r_genes_results.csv", row.names=FALSE)
+
+```
+
+
+#### Subset Susceptible lines (significant qval <= 0.05)
+
+```{r}
+
+bg_s <- subset(bg_filt, "reaction == 'S'", genomesubset=FALSE)
+
+bg_s_transcripts_results <-  stattest(bg_r, feature='transcript', covariate='timepoint', 
+         getFC=FALSE, meas='FPKM', timecourse=FALSE, df=3)
+
+bg_s_gene_results <-  stattest(bg_s, feature='gene', covariate='timepoint', 
+         getFC=FALSE, meas='FPKM', timecourse=FALSE, df=3)
+
+## Add gene name
+bg_s_transcripts_results <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), bg_s_transcripts_results)
+
+bg_s_transcripts_results_signficant <- subset(bg_s_transcripts_results, bg_s_transcripts_results$qval <=0.05 )
+bg_s_gene_results_significant <- subset(bg_s_gene_results, bg_s_gene_results$qval <=0.05)
+
+bg_s_transcripts_results_signficant <- arrange(bg_s_transcripts_results_signficant, qval)
+bg_s_gene_results_significant <-  arrange(bg_s_gene_results_significant, qval)
+
+## Write results to CSV
+write.csv(bg_s_transcripts_results_signficant, "siskiyou_s_transcripts_results.csv", row.names=FALSE)
+write.csv(bg_s_gene_results_significant, "siskiyou_s_genes_results.csv", row.names=FALSE)
+
+```
+
+
+https://support.bioconductor.org/p/104813/
+
+### Pairwise time comparisons (pval is being used can change to qval)
+
+output for individual text files masked
+
+```{r}
+# create a list of consecutive time points for stattest
+timelist <- c("24v48"="timepoint == '24' | timepoint == '48'",
+              "48v72"="timepoint == '48' | timepoint == '72'",
+              "72v96"="timepoint == '72' | timepoint == '96'")
+
+# create a list of each reaction
+reactlist <- c("R"="reaction == 'R'","S"="reaction == 'S'")
+
+# Initiate list for transcripts and genes
+tl <- list()
+gl <- list()
+
+# set loop counters
+cnt=0
+wholecnt=0
+
+for(r in reactlist){ # Foreach reaction r
+  cnt=cnt+1
+  reactname <- names(reactlist[cnt]) 
+  
+  # subset reaction r
+  tmp_react <- subset(bg_filt, r, genomesubset=FALSE) # subset r
+  b=0
+  
+  # Foreach time set
+  for(t in timelist){ 
+    wholecnt=wholecnt+1
+    
+    b=b+1
+    
+    # get the time set label from the list
+    timename <- names(timelist[b])
+    
+    # subset the two timepoints
+    tmp_time <- subset(tmp_react, t, genomesubset=FALSE) 
+    
+    # test the reaction timepoints for transcripts
+    trans_results <-  stattest(tmp_time, feature='transcript', covariate='timepoint', 
+                                          getFC=FALSE, meas='FPKM', timecourse=FALSE, df=3)
+    
+    # test the reaction timepoints for genes
+    gene_results <-  stattest(tmp_time, feature='gene', covariate='timepoint', 
+         getFC=FALSE, meas='FPKM', timecourse=FALSE, df=3)
+    
+    ## Add gene name
+    trans_results <- data.frame(geneNames=ballgown::geneNames(bg_filt),
+          geneIDs=ballgown::geneIDs(bg_filt), trans_results)
+    
+    # filer out results above the threshold pval. Significant is qval
+    trans_results_significant <- subset(trans_results, trans_results$pval <=0.05 )
+    gene_results_significant <- subset(gene_results, gene_results$pval <=0.05)
+    
+    # sort the results
+    trans_results_significant <- arrange(trans_results_significant, pval)
+    gene_results_significant <-  arrange(gene_results_significant, pval)
+    
+    # add the reaction and time set labels to the table
+    trans_results_significant$reaction <- reactname
+    trans_results_significant$times <- timename
+      
+    gene_results_significant$reaction <- reactname
+    gene_results_significant$times <- timename
+    
+    ## Write results to individual CSV files
+    #fnamet <- paste("siskiyou_",reactname,"_",timename,"_transcripts_results.csv", sep="")
+    #fnameg <- paste("siskiyou_",reactname,"_",timename,"_genes_results.csv", sep="")
+    #write.csv(trans_results_significant, fnamet, row.names=FALSE)
+    #write.csv(gene_results_significant, fnameg, row.names=FALSE)
+    
+    # The results are stored in a list indexed by the nested loop counter
+    tl[[wholecnt]] <- trans_results_significant
+    gl[[wholecnt]] <- gene_results_significant
+    
+  }
+
+}
+
+```
+
+Outputs all pairwise time comparisons for R and S
+
+```{r, warning=FALSE, message=FALSE}
+library(data.table)
+all_transcripts_time_results <- rbindlist(tl,use.names=TRUE)
+all_genes_time_results <- rbindlist(tl,use.names=TRUE)
+
+write.csv(all_transcripts_time_results, "all_transcripts_time_results.csv", row.names=FALSE)
+write.csv(gene_results_significant, "all_gene_time_results.csv", row.names=FALSE)
+
+```
+
+
+```{r}
+session_info()
+```
